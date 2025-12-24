@@ -1,0 +1,90 @@
+name: Update Dream Dashboard
+on:
+  issues:
+    types: [opened, edited, closed, reopened]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync Issue to JSON DB
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              labels: 'dream'
+            });
+
+            const dreams = issues.data.map(issue => {
+              // 本文から進捗率（Progress: XX%）を抽出
+              const progressMatch = issue.body.match(/Progress:\s*(\d+)%/);
+              const progress = progressMatch ? parseInt(progressMatch[1]) : 0;
+              
+              return {
+                id: issue.id,
+                title: issue.title,
+                url: issue.html_url,
+                state: issue.state,
+                progress: issue.state === 'closed' ? 100 : progress,
+                updated_at: issue.updated_at
+              };
+            });
+
+            fs.writeFileSync('dreams.json', JSON.stringify(dreams, null, 2));
+
+      - name: Create Dashboard HTML
+        run: |
+          cat <<EOF > index.html
+          <!DOCTYPE html>
+          <html lang="ja">
+          <head>
+              <meta charset="UTF-8">
+              <script src="https://cdn.tailwindcss.com"></script>
+              <title>Dream Roadmap 100</title>
+          </head>
+          <body class="bg-slate-900 text-slate-100 p-8">
+              <div class="max-w-4xl mx-auto">
+                  <h1 class="text-4xl font-black mb-10 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
+                      BACKCASTING ROADMAP 100
+                  </h1>
+                  <div id="app" class="space-y-6"></div>
+              </div>
+              <script>
+                  fetch('./dreams.json').then(r => r.json()).then(data => {
+                      const app = document.getElementById('app');
+                      data.sort((a, b) => b.progress - a.progress).forEach(dream => {
+                          app.innerHTML += \`
+                              <a href="\${dream.url}" target="_blank" class="block p-6 bg-slate-800 rounded-xl border border-slate-700 hover:border-blue-500 transition">
+                                  <div class="flex justify-between mb-4">
+                                      <span class="font-bold text-xl">\${dream.title}</span>
+                                      <span class="text-blue-400 font-mono">\${dream.progress}%</span>
+                                  </div>
+                                  <div class="w-full bg-slate-700 h-3 rounded-full overflow-hidden">
+                                      <div class="bg-gradient-to-r from-blue-500 to-emerald-500 h-full transition-all duration-1000" style="width: \${dream.progress}%"></div>
+                                  </div>
+                              </a>
+                          \`;
+                      });
+                  });
+              </script>
+          </body>
+          </html>
+          EOF
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .
+          publish_branch: gh-pages
